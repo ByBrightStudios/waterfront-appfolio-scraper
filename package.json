@@ -1,0 +1,14 @@
+{
+  "name": "waterfront-appfolio-scraper",
+  "version": "1.0.0",
+  "description": "Scrapes AppFolio listings and pushes to Google Sheets",
+  "main": "scrape.js",
+  "scripts": {
+    "scrape": "node scrape.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.0",
+    "cheerio": "^1.0.0",
+    "googleapis": "^140.0.0"
+  }
+}
