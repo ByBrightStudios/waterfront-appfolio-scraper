@@ -2,19 +2,20 @@
  * Waterfront Management — AppFolio Listings Scraper
  *
  * Scrapes https://waterfrontmgmtllc.appfolio.com/listings
- * Pushes data to a Google Sheet for Framer to consume.
+ * Writes data to listings.csv in this repo.
+ * GitHub Actions commits the updated CSV automatically.
  *
- * Runs on GitHub Actions every 10 minutes.
+ * No Google Cloud. No service accounts. Just GitHub.
  */
 
 const axios = require('axios');
 const cheerio = require('cheerio');
-const { google } = require('googleapis');
+const fs = require('fs');
+const path = require('path');
 
 // ─── CONFIG ───────────────────────────────────────────────
 const APPFOLIO_URL = 'https://waterfrontmgmtllc.appfolio.com/listings';
-const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID;
-const SHEET_NAME = 'Sheet1'; // Default Google Sheet tab name
+const OUTPUT_FILE = path.join(__dirname, 'listings.csv');
 
 // ─── STEP 1: SCRAPE APPFOLIO ─────────────────────────────
 async function scrapeListings() {
@@ -31,13 +32,7 @@ async function scrapeListings() {
 
   // ─── SELECTOR STRATEGY ──────────────────────────────────
   // AppFolio uses a standard listing card structure.
-  // Common selectors: .listing-item, .js-listing-card, .listing-card
-  //
-  // IMPORTANT: After first run, inspect the actual page HTML and
-  // adjust these selectors if needed. Run `node inspect.js` to
-  // dump the raw HTML for review.
-  //
-  // Strategy: try multiple known AppFolio selectors
+  // Run `node inspect.js` to dump the raw HTML and tune selectors.
   // ────────────────────────────────────────────────────────
 
   const listingCards = $('.listing-item').length > 0
@@ -45,8 +40,6 @@ async function scrapeListings() {
     : $('.js-listable-card').length > 0
     ? $('.js-listable-card')
     : $('[class*="listing"]').filter(function() {
-        // Fallback: find any element with "listing" in the class
-        // that contains address-like content
         return $(this).find('[class*="address"], [class*="rent"], [class*="price"]').length > 0;
       });
 
@@ -55,7 +48,6 @@ async function scrapeListings() {
   listingCards.each((i, el) => {
     const card = $(el);
 
-    // Extract data — adjust selectors after inspecting real HTML
     const listing = {
       address: extractText(card, [
         '.listing-item__address',
@@ -111,24 +103,20 @@ async function scrapeListings() {
                .css('background-image')?.replace(/url\(['"]?(.*?)['"]?\)/, '$1') || ''
     };
 
-    // Clean up rent (remove whitespace, ensure $ prefix)
     if (listing.rent) {
       listing.rent = listing.rent.replace(/\s+/g, ' ').trim();
     }
 
-    // Make link absolute if relative
     if (listing.link && !listing.link.startsWith('http')) {
       listing.link = `https://waterfrontmgmtllc.appfolio.com${listing.link}`;
     }
 
-    // Only add if we got at least an address
     if (listing.address) {
       listings.push(listing);
     }
   });
 
-  // If card-based scraping found nothing, try table-based scraping
-  // (some AppFolio pages use a table layout)
+  // Fallback: try table-based scraping
   if (listings.length === 0) {
     console.log('No card-based listings found. Trying table layout...');
 
@@ -158,9 +146,6 @@ async function scrapeListings() {
   return listings;
 }
 
-/**
- * Try multiple CSS selectors and return the first match's text
- */
 function extractText(card, selectors, $) {
   for (const sel of selectors) {
     const el = card.find(sel).first();
@@ -171,53 +156,43 @@ function extractText(card, selectors, $) {
   return '';
 }
 
-// ─── STEP 2: PUSH TO GOOGLE SHEETS ───────────────────────
-async function pushToSheets(listings) {
-  console.log('Authenticating with Google Sheets...');
-
-  // Auth via service account credentials (stored as GitHub secret)
-  const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY);
-
-  const auth = new google.auth.GoogleAuth({
-    credentials,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets']
-  });
-
-  const sheets = google.sheets({ version: 'v4', auth });
-
-  // Header row
+// ─── STEP 2: WRITE CSV ──────────────────────────────────
+function writeCSV(listings) {
   const headers = [
     'Address', 'Unit', 'Rent', 'Beds', 'Baths',
     'Sq Ft', 'Available', 'Status', 'Link', 'Image URL',
     'Last Updated'
   ];
 
-  // Data rows
   const timestamp = new Date().toISOString();
+
   const rows = listings.map(l => [
-    l.address, l.unit, l.rent, l.beds, l.baths,
-    l.sqft, l.available, l.status, l.link, l.image,
-    timestamp
-  ]);
+    csvEscape(l.address),
+    csvEscape(l.unit),
+    csvEscape(l.rent),
+    csvEscape(l.beds),
+    csvEscape(l.baths),
+    csvEscape(l.sqft),
+    csvEscape(l.available),
+    csvEscape(l.status),
+    csvEscape(l.link),
+    csvEscape(l.image),
+    csvEscape(timestamp)
+  ].join(','));
 
-  // Clear existing data and write fresh
-  console.log(`Writing ${rows.length} listings to Google Sheets...`);
+  const csv = [headers.join(','), ...rows].join('\n');
 
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:K`
-  });
+  fs.writeFileSync(OUTPUT_FILE, csv, 'utf-8');
+  console.log(`Written ${listings.length} listings to ${OUTPUT_FILE}`);
+}
 
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A1`,
-    valueInputOption: 'USER_ENTERED',
-    requestBody: {
-      values: [headers, ...rows]
-    }
-  });
-
-  console.log(`Done! ${rows.length} listings written to sheet.`);
+function csvEscape(val) {
+  if (!val) return '';
+  val = String(val);
+  if (val.includes(',') || val.includes('"') || val.includes('\n')) {
+    return `"${val.replace(/"/g, '""')}"`;
+  }
+  return val;
 }
 
 // ─── STEP 3: RUN ─────────────────────────────────────────
@@ -228,7 +203,6 @@ async function main() {
     if (listings.length === 0) {
       console.warn('WARNING: No listings found. Check selectors.');
       console.warn('Run `node inspect.js` to dump the raw HTML.');
-      // Don't overwrite the sheet with empty data
       process.exit(1);
     }
 
@@ -237,7 +211,7 @@ async function main() {
       console.log(`  ${i + 1}. ${l.address} ${l.unit} — ${l.rent}`);
     });
 
-    await pushToSheets(listings);
+    writeCSV(listings);
   } catch (err) {
     console.error('Scraper failed:', err.message);
     process.exit(1);

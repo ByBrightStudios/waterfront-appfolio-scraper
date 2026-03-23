@@ -2,10 +2,10 @@
   FRAMER CUSTOM CODE COMPONENT
 
   Paste this into a Custom Code component in Framer.
-  It fetches the published Google Sheet CSV and renders
+  It fetches listings.csv from the GitHub repo and renders
   a clean, responsive availability table.
 
-  Replace YOUR_SHEET_ID with the actual Google Sheet ID.
+  No Google Sheets. No API keys. Just a public CSV on GitHub.
 -->
 
 <div id="availability-table"></div>
@@ -104,7 +104,6 @@
     color: #adb5bd;
   }
 
-  /* Responsive: stack on mobile */
   @media (max-width: 768px) {
     .avail-table thead {
       display: none;
@@ -141,18 +140,18 @@
     const container = document.getElementById('availability-table');
 
     // ─── CONFIG ────────────────────────────────────
-    // Replace with your actual Google Sheet ID
-    const SHEET_ID = 'YOUR_SHEET_ID';
-    const SHEET_NAME = 'Listings';
-    const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${SHEET_NAME}`;
+    // Raw GitHub URL — works because the repo is public
+    // If private, use a GitHub Pages deploy or make repo public
+    const CSV_URL = 'https://raw.githubusercontent.com/ByBrightStudios/waterfront-appfolio-scraper/main/listings.csv';
 
-    // Columns to display (match your sheet headers)
+    // Columns to display
     const DISPLAY_COLS = ['Address', 'Unit', 'Rent', 'Beds', 'Baths', 'Sq Ft', 'Available'];
 
     // ─── FETCH & RENDER ───────────────────────────
     container.innerHTML = '<div class="avail-loading">Loading availability...</div>';
 
-    fetch(CSV_URL)
+    // Cache-bust to get fresh data (GitHub raw caches for ~5 min)
+    fetch(CSV_URL + '?t=' + Date.now())
       .then(res => {
         if (!res.ok) throw new Error('Failed to load listings');
         return res.text();
@@ -165,9 +164,8 @@
         }
 
         const headers = rows[0];
-        const data = rows.slice(1).filter(row => row[0]); // skip empty rows
+        const data = rows.slice(1).filter(row => row[0]);
 
-        // Find column indices
         const colMap = {};
         DISPLAY_COLS.forEach(name => {
           colMap[name] = headers.findIndex(h =>
@@ -175,27 +173,22 @@
           );
         });
 
-        // Find link column
         const linkIdx = headers.findIndex(h =>
           h.toLowerCase().trim() === 'link'
         );
 
-        // Find last updated column
         const updatedIdx = headers.findIndex(h =>
           h.toLowerCase().includes('updated')
         );
 
-        // Build table
         let html = '<table class="avail-table">';
 
-        // Header
         html += '<thead><tr>';
         DISPLAY_COLS.forEach(col => {
           html += `<th>${col}</th>`;
         });
         html += '</tr></thead>';
 
-        // Body
         html += '<tbody>';
         data.forEach(row => {
           html += '<tr>';
@@ -204,7 +197,6 @@
             let val = idx >= 0 ? (row[idx] || '').trim() : '';
             const link = linkIdx >= 0 ? (row[linkIdx] || '').trim() : '';
 
-            // Style specific columns
             if (col === 'Rent') {
               html += `<td data-label="${col}" class="avail-rent">${val}</td>`;
             } else if (col === 'Address' && link) {
@@ -221,7 +213,6 @@
         });
         html += '</tbody></table>';
 
-        // Last updated timestamp
         if (updatedIdx >= 0 && data[0] && data[0][updatedIdx]) {
           const updated = new Date(data[0][updatedIdx]);
           html += `<div class="avail-updated">Last updated: ${updated.toLocaleString()}</div>`;
@@ -248,7 +239,7 @@
         if (inQuotes) {
           if (char === '"' && next === '"') {
             field += '"';
-            i++; // skip escaped quote
+            i++;
           } else if (char === '"') {
             inQuotes = false;
           } else {
@@ -265,13 +256,12 @@
             rows.push(current);
             current = [];
             field = '';
-            if (char === '\r') i++; // skip \n after \r
+            if (char === '\r') i++;
           } else {
             field += char;
           }
         }
       }
-      // Push last field/row
       if (field || current.length > 0) {
         current.push(field);
         rows.push(current);
