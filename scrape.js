@@ -31,129 +31,80 @@ async function scrapeListings() {
   const listings = [];
 
   // ─── SELECTOR STRATEGY ──────────────────────────────────
-  // AppFolio uses a standard listing card structure.
-  // Run `node inspect.js` to dump the raw HTML and tune selectors.
+  // AppFolio uses .listing-item cards with a detail-box
+  // containing labeled <dt>/<dd> pairs for Rent, Bed/Bath,
+  // Square Feet, and Available. Images use lazy loading
+  // with the real URL in data-original.
+  //
+  // Run `node inspect.js` then `node debug.js` to re-check.
   // ────────────────────────────────────────────────────────
 
-  const listingCards = $('.listing-item').length > 0
-    ? $('.listing-item')
-    : $('.js-listable-card').length > 0
-    ? $('.js-listable-card')
-    : $('[class*="listing"]').filter(function() {
-        return $(this).find('[class*="address"], [class*="rent"], [class*="price"]').length > 0;
-      });
-
+  const listingCards = $('.listing-item');
   console.log(`Found ${listingCards.length} listing cards`);
 
   listingCards.each((i, el) => {
     const card = $(el);
 
-    const listing = {
-      address: extractText(card, [
-        '.listing-item__address',
-        '.js-listing-address',
-        '[class*="address"]',
-        'h2', 'h3'
-      ], $),
+    // --- Address ---
+    const address = card.find('.js-listing-address').text().trim();
 
-      unit: extractText(card, [
-        '.listing-item__unit',
-        '[class*="unit"]'
-      ], $),
+    // --- Detail-box facts (the reliable structured data) ---
+    let rent = '';
+    let beds = '';
+    let baths = '';
+    let sqft = '';
+    let available = '';
 
-      rent: extractText(card, [
-        '.listing-item__rent',
-        '.js-listing-rent',
-        '[class*="rent"]',
-        '[class*="price"]'
-      ], $),
+    card.find('.detail-box__item').each((j, item) => {
+      const label = $(item).find('.detail-box__label').text().trim().toUpperCase();
+      const value = $(item).find('.detail-box__value').text().trim();
 
-      beds: extractText(card, [
-        '.listing-item__beds',
-        '[class*="bed"]'
-      ], $),
+      if (label === 'RENT') rent = value;
+      else if (label === 'BED / BATH' || label === 'BED/BATH') {
+        const parts = value.split('/').map(s => s.trim());
+        beds = parts[0] || value;
+        baths = parts[1] || '';
+      }
+      else if (label === 'SQUARE FEET') sqft = value;
+      else if (label === 'AVAILABLE') available = value;
+    });
 
-      baths: extractText(card, [
-        '.listing-item__baths',
-        '[class*="bath"]'
-      ], $),
-
-      sqft: extractText(card, [
-        '.listing-item__sqft',
-        '[class*="sqft"]',
-        '[class*="size"]',
-        '[class*="area"]'
-      ], $),
-
-      available: extractText(card, [
-        '.listing-item__available',
-        '[class*="avail"]',
-        '[class*="date"]'
-      ], $),
-
-      status: extractText(card, [
-        '.listing-item__status',
-        '[class*="status"]'
-      ], $),
-
-      link: card.find('a').first().attr('href') || '',
-
-      image: card.find('img').first().attr('src') ||
-             card.find('[style*="background-image"]').first()
-               .css('background-image')?.replace(/url\(['"]?(.*?)['"]?\)/, '$1') || ''
-    };
-
-    if (listing.rent) {
-      listing.rent = listing.rent.replace(/\s+/g, ' ').trim();
+    // Fallback: blurb selectors (mobile-facing elements)
+    if (!rent) rent = card.find('.js-listing-blurb-rent').text().trim();
+    if (!beds) {
+      const bedBath = card.find('.js-listing-blurb-bed-bath').text().trim();
+      if (bedBath) {
+        const parts = bedBath.split('/').map(s => s.trim());
+        beds = parts[0] || bedBath;
+        baths = parts[1] || '';
+      }
+    }
+    if (!sqft) {
+      const sqftText = card.find('.js-listing-square-feet').text().trim();
+      sqft = sqftText.replace(/^Square Feet:\s*/i, '');
+    }
+    if (!available) {
+      const availText = card.find('.js-listing-available').first().text().trim();
+      available = availText.replace(/^Available\s*/i, '');
     }
 
-    if (listing.link && !listing.link.startsWith('http')) {
-      listing.link = `https://waterfrontmgmtllc.appfolio.com${listing.link}`;
+    // --- Link ---
+    let link = card.find('a.js-link-to-detail').attr('href') ||
+               card.find('a').first().attr('href') || '';
+    if (link && !link.startsWith('http')) {
+      link = `https://waterfrontmgmtllc.appfolio.com${link}`;
     }
 
-    if (listing.address) {
-      listings.push(listing);
+    // --- Image (real URL in data-original, src is placeholder) ---
+    const img = card.find('img.js-listing-image');
+    const image = img.attr('data-original') || img.attr('src') || '';
+
+    if (address) {
+      listings.push({ address, unit: '', rent, beds, baths, sqft, available, status: '', link, image });
     }
   });
 
-  // Fallback: try table-based scraping
-  if (listings.length === 0) {
-    console.log('No card-based listings found. Trying table layout...');
-
-    $('table tbody tr, .listing-row').each((i, el) => {
-      const row = $(el);
-      const cells = row.find('td');
-
-      if (cells.length >= 3) {
-        listings.push({
-          address: $(cells[0]).text().trim(),
-          unit: $(cells[1]).text().trim(),
-          rent: $(cells[2]).text().trim(),
-          beds: cells.length > 3 ? $(cells[3]).text().trim() : '',
-          baths: cells.length > 4 ? $(cells[4]).text().trim() : '',
-          sqft: cells.length > 5 ? $(cells[5]).text().trim() : '',
-          available: cells.length > 6 ? $(cells[6]).text().trim() : '',
-          status: cells.length > 7 ? $(cells[7]).text().trim() : '',
-          link: row.find('a').first().attr('href') || '',
-          image: ''
-        });
-      }
-    });
-
-    console.log(`Found ${listings.length} table-based listings`);
-  }
-
   return listings;
-}
-
-function extractText(card, selectors, $) {
-  for (const sel of selectors) {
-    const el = card.find(sel).first();
-    if (el.length > 0) {
-      return el.text().trim();
-    }
-  }
-  return '';
 }
 
 // ─── STEP 2: WRITE CSV ──────────────────────────────────
@@ -202,13 +153,13 @@ async function main() {
 
     if (listings.length === 0) {
       console.warn('WARNING: No listings found. Check selectors.');
-      console.warn('Run `node inspect.js` to dump the raw HTML.');
+      console.warn('Run `node inspect.js` then `node debug.js` to re-check.');
       process.exit(1);
     }
 
     console.log(`Scraped ${listings.length} listings:`);
     listings.forEach((l, i) => {
-      console.log(`  ${i + 1}. ${l.address} ${l.unit} — ${l.rent}`);
+      console.log(`  ${i + 1}. ${l.address} — ${l.rent} | ${l.beds} / ${l.baths} | ${l.sqft} sqft | Avail: ${l.available}`);
     });
 
     writeCSV(listings);
