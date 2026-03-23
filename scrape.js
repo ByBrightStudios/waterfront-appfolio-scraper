@@ -14,7 +14,7 @@ const { google } = require('googleapis');
 // ─── CONFIG ───────────────────────────────────────────────
 const APPFOLIO_URL = 'https://waterfrontmgmtllc.appfolio.com/listings';
 const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID;
-const SHEET_NAME = 'Listings'; // Tab name in your Google Sheet
+const SHEET_NAME = 'Sheet1'; // Default Google Sheet tab name
 
 // ─── STEP 1: SCRAPE APPFOLIO ─────────────────────────────
 async function scrapeListings() {
